@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VRIME 跨屏输入</title>
+<style>body{font:17px system-ui;margin:32px auto;padding:0 20px;max-width:640px;background:#f5f6fa;color:#202330}h1{font-size:28px}input,textarea,button{font:inherit;box-sizing:border-box;border:1px solid #b8bfce;border-radius:10px;padding:12px}input,textarea{width:100%;background:white}textarea{min-height:220px;margin-top:18px}button{background:#3155c6;color:white;cursor:pointer;margin-top:12px}button:disabled{opacity:.5}p{line-height:1.6}#status{min-height:52px}label{display:block;margin-top:20px}</style>
+<h1>VRIME 跨屏输入</h1><p>填写头显显示的配对码，连接后实时同步 Quest 当前输入框的文字和选区。</p>
+<label for="code">配对码</label><input id="code" autocomplete="off" autocapitalize="none" spellcheck="false" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="4 位数字">
+<button id="connect">连接输入法</button>
+<button id="disconnect" disabled>断开连接</button>
+<label for="text">输入文字</label><textarea id="text" maxlength="32768" disabled placeholder="连接后在这里输入，中文组词结束后自动同步"></textarea>
+<button id="backspace" hidden>退格</button>
+<p id="status" role="status" aria-live="polite">尚未连接</p>
+<p>请在可信的局域网使用。完成后，在 Quest 的跨屏输入面板关闭服务。</p>
+<script>
+const code=document.querySelector('#code'), text=document.querySelector('#text'), status=document.querySelector('#status'), connect=document.querySelector('#connect'), disconnect=document.querySelector('#disconnect'), backspace=document.querySelector('#backspace');
+let pairedCode='', connected=false, composing=false, busy=false, state=null, dirty=false, change=0, deferredState=null, connectionEpoch=0, pendingKeys=[];
+function localEdit(){
+  if(!state?.available)return;
+  if(state.readable===false){
+    if(!composing&&text.value){pendingKeys.push({text:text.value});text.value='';}
+    return;
+  }
+  dirty=text.value!==state.text||text.selectionStart!==state.selectionStart||text.selectionEnd!==state.selectionEnd;
+  if(dirty)change++;
+}
+backspace.onclick=()=>{if(connected&&state?.available&&state.readable===false)pendingKeys.push({text:'',backspace:true})};
+text.addEventListener('keydown',event=>{
+  if(state?.readable===false&&!composing&&event.key==='Backspace'&&!text.value){event.preventDefault();backspace.onclick()}
+});
+text.addEventListener('beforeinput',event=>{
+  if(state?.readable===false&&!composing&&event.inputType==='deleteContentBackward'&&!text.value){event.preventDefault();backspace.onclick()}
+});
+text.addEventListener('compositionstart',()=>{composing=true});
+text.addEventListener('compositionend',()=>{composing=false;if(deferredState){render(deferredState);deferredState=null}else localEdit()});
+for(const event of ['input','select','keyup','pointerup'])text.addEventListener(event,localEdit);
+document.addEventListener('selectionchange',()=>{if(document.activeElement===text&&!composing)localEdit()});
+function render(next){
+  if(state && (state.revision!==next.revision || state.readable!==next.readable))pendingKeys=[];
+  state=next; dirty=false;
+  backspace.hidden=next.readable!==false;
+  backspace.disabled=!next.available;
+  text.placeholder=next.readable===false?'在此输入，文字会自动发到 Quest；网页不保留内容':'连接后在这里输入，中文组词结束后自动同步';
+  text.disabled=!next.available;
+  if(text.value!==next.text)text.value=next.text;
+  if(text.selectionStart!==next.selectionStart||text.selectionEnd!==next.selectionEnd)
+    text.setSelectionRange(next.selectionStart,next.selectionEnd);
+  status.textContent=next.message;
+}
+disconnect.onclick=()=>{
+  connectionEpoch++;
+  connected=false;busy=false;pairedCode='';state=null;dirty=false;composing=false;deferredState=null;pendingKeys=[];backspace.hidden=true;
+  text.disabled=true;disconnect.disabled=true;status.textContent='已断开连接';
+};
+async function request(path,options={}){
+  const epoch=connectionEpoch;
+  const response=await fetch(path,{...options,headers:{'X-Pairing-Code':pairedCode,...options.headers},signal:AbortSignal.timeout(5000)});
+  if(epoch!==connectionEpoch)throw Error('disconnected');
+  if(response.status===403||response.status===429){connected=false;throw Error(await response.text())}
+  if(!response.ok&&response.status!==409)throw Error(await response.text());
+  const next=await response.json();
+  if(epoch!==connectionEpoch)throw Error('disconnected');
+  return {state:next,conflict:response.status===409};
+}
+connect.onclick=async()=>{
+  if(busy)return;
+  const epoch=++connectionEpoch;
+  pairedCode=code.value.trim();busy=true;disconnect.disabled=false;
+  try{const result=await request('/state');connected=true;render(result.state)}
+  catch(e){if(epoch===connectionEpoch)status.textContent='连接失败：'+e.message}
+  finally{if(epoch===connectionEpoch)busy=false}
+};
+async function tick(){
+  if(connected&&!busy&&!composing){
+    busy=true;
+    const version=change, epoch=connectionEpoch;
+    try{
+      if(pendingKeys.length&&state?.available&&state.readable===false){
+        const key=pendingKeys.shift();
+        const result=await request('/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({...key,selectionStart:0,selectionEnd:0,revision:state.revision,oneWay:true})});
+        if(result.conflict)pendingKeys=[];
+        if(!composing)render(result.state);
+        if(result.conflict)status.textContent='输入未完成，请确认 Quest 当前输入位置后继续';
+      }else if(dirty&&state?.available){
+        const result=await request('/sync',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({text:text.value,selectionStart:text.selectionStart,selectionEnd:text.selectionEnd,revision:state.revision})});
+        if(composing){state=result.state;if(result.conflict)deferredState=result.state}
+        else if(result.conflict||change===version)render(result.state);
+        else {state=result.state;localEdit()}
+      }else{
+        const result=await request('/state');
+        if(!composing&&change===version)render(result.state);
+      }
+    }catch(e){if(epoch===connectionEpoch){pendingKeys=[];status.textContent=state?.readable===false?'输入未确认，请检查 Quest 后继续；不会自动重发':connected?'连接暂时中断，正在重试…':'请重新填写配对码：'+e.message}}
+    finally{if(epoch===connectionEpoch)busy=false}
+  }
+  setTimeout(tick,200);
+}
+tick();
+</script></html>

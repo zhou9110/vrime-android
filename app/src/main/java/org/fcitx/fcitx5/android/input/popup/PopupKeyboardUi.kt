@@ -50,7 +50,7 @@ class PopupKeyboardUi(
     onDismissSelf: PopupContainerUi.() -> Unit = {},
     private val radius: Float,
     private val keyWidth: Int,
-    private val keyHeight: Int,
+    keyHeight: Int,
     private val popupHeight: Int,
     private val keys: Array<String>,
     private val labels: Array<String>
@@ -81,6 +81,10 @@ class PopupKeyboardUi(
         cornerRadius = radius
         setColor(theme.genericActiveBackgroundColor)
     }
+
+    private val keyHeight = keyHeight.coerceAtMost(
+        outerBounds.height() / ceil(keys.size / 5f).toInt().coerceAtLeast(1)
+    ).coerceAtLeast(1)
 
     private val rowCount: Int
     private val columnCount: Int
@@ -128,7 +132,10 @@ class PopupKeyboardUi(
      * `2.` parts of both offset transform it from `p` to `c`.
      */
     override val offsetX = ((triggerBounds.width() - keyWidth) / 2) - (keyWidth * focusColumn)
-    override val offsetY = (triggerBounds.height() - popupHeight) - (keyHeight * (rowCount - 1))
+    override val offsetY = PopupPlacement.top(
+        triggerBounds.bottom - popupHeight - this.keyHeight * (rowCount - 1),
+        this.keyHeight * rowCount, outerBounds.top, outerBounds.bottom
+    ) - triggerBounds.top
 
     private val columnOrder = createColumnOrder(columnCount, focusColumn)
 

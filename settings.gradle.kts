@@ -16,7 +16,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "fcitx5-android"
+rootProject.name = "vrime-android"
 
 include(":lib:common")
 include(":lib:fcitx5")

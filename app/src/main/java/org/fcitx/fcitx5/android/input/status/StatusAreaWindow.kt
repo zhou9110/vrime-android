@@ -4,6 +4,8 @@
  */
 package org.fcitx.fcitx5.android.input.status
 
+import org.fcitx.fcitx5.android.input.status.StatusAreaEntry.Android.Type.FloatingKeyboard
+import org.fcitx.fcitx5.android.input.status.StatusAreaEntry.Android.Type.CrossScreenInput
 import android.os.Build
 import android.view.View
 import android.widget.PopupMenu
@@ -57,6 +59,10 @@ class StatusAreaWindow : InputWindow.ExtendedInputWindow<StatusAreaWindow>(),
 
     private val staticEntries by lazy {
         arrayOf(
+            StatusAreaEntry.Android(context.getString(R.string.floating_keyboard),
+                R.drawable.ic_baseline_flip_24, FloatingKeyboard),
+            StatusAreaEntry.Android(context.getString(R.string.cross_screen_input),
+                R.drawable.ic_baseline_send_24, CrossScreenInput),
             StatusAreaEntry.Android(
                 context.getString(R.string.theme),
                 R.drawable.ic_baseline_palette_24,
@@ -150,6 +156,11 @@ class StatusAreaWindow : InputWindow.ExtendedInputWindow<StatusAreaWindow>(),
                                 Toast.makeText(service, R.string.done, Toast.LENGTH_SHORT).show()
                             }
                         }
+                        FloatingKeyboard -> {
+                            windowManager.attachWindow(org.fcitx.fcitx5.android.input.keyboard.KeyboardWindow)
+                            service.toggleFloatingKeyboard()
+                        }
+                        CrossScreenInput -> service.showCrossScreenInput()
                         Keyboard -> AppUtil.launchMainToKeyboard(context)
                         ThemeList -> AppUtil.launchMainToThemeList(context)
                     }

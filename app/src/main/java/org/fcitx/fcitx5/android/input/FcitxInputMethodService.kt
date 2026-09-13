@@ -46,6 +46,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.launch
 import org.fcitx.fcitx5.android.R
+import org.fcitx.fcitx5.android.input.remote.EditorState
+import org.fcitx.fcitx5.android.input.remote.EditorEdit
+import org.fcitx.fcitx5.android.input.remote.TextChange
+import org.fcitx.fcitx5.android.core.CapabilityFlag
 import org.fcitx.fcitx5.android.core.CapabilityFlags
 import org.fcitx.fcitx5.android.core.FcitxAPI
 import org.fcitx.fcitx5.android.core.FcitxEvent
@@ -595,10 +599,155 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
         win.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     }
 
+    private var crossScreenServer: org.fcitx.fcitx5.android.input.remote.CrossScreenServer? = null
+    private var crossScreenStarting = false
+    private var inputTargetGeneration = 0L
+    private var remoteTargetActive = false
+
+    private var remoteSnapshot = EditorState()
+    private var remoteSnapshotGeneration = -1L
+
+    private fun readRemoteState(): EditorState {
+        val connection = currentInputConnection
+        val extracted = if (remoteTargetActive && connection != null &&
+            currentInputEditorInfo?.isTypeNull() == false && !capabilityFlags.has(CapabilityFlag.Password)) {
+            connection.getExtractedText(android.view.inputmethod.ExtractedTextRequest().apply {
+                hintMaxChars = 32768
+                hintMaxLines = 1000
+            }, 0)
+        } else null
+        val value = extracted?.text?.toString()
+        val available = value != null && value.length <= 32768 && extracted.startOffset == 0 &&
+            extracted.partialStartOffset == -1 && extracted.selectionStart in 0..value.length &&
+            extracted.selectionEnd in 0..value.length
+        val next = if (available) EditorState(true, value, extracted.selectionStart,
+            extracted.selectionEnd, message = "已连接，文字与选区实时同步")
+        else if (remoteTargetActive && connection != null) EditorState(
+            available = true, readable = false,
+            message = "单向输入：文字自动发到 Quest，网页不保留输入内容；选区请在 Quest 调整")
+        else EditorState(message = "请在 Quest 选中输入框，连接会保持")
+        if (next != remoteSnapshot.copy(revision = 0) || remoteSnapshotGeneration != inputTargetGeneration) {
+            remoteSnapshot = next.copy(revision = remoteSnapshot.revision + 1)
+            remoteSnapshotGeneration = inputTargetGeneration
+        }
+        return remoteSnapshot
+    }
+
+    private suspend fun syncRemoteEdit(edit: EditorEdit): EditorState? {
+        val before = readRemoteState()
+        val connection = currentInputConnection ?: return null
+        if (!edit.canApplyTo(before)) return null
+        if (edit.oneWay) {
+            // Password/raw editors need direct input. Do not finish composition or reset
+            // Fcitx here: that can restart the editor and invalidate an otherwise valid write.
+            val accepted = if (edit.backspace) {
+                val down = connection.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+                val up = connection.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+                down && up
+            } else connection.commitText(edit.text, 1)
+            return if (accepted) readRemoteState() else null
+        }
+        if (before.text != edit.text) {
+            connection.finishComposingText()
+            resetComposingState()
+            val resetJob = postFcitxJob { reset() }
+            try { resetJob.join() } finally { if (!resetJob.isCompleted) resetJob.cancel() }
+            if (connection !== currentInputConnection || readRemoteState().revision != before.revision) return null
+        }
+        connection.beginBatchEdit()
+        try {
+            if (before.text != edit.text) {
+                val change = TextChange.between(before.text, edit.text)
+                if (!connection.setSelection(change.start, change.end) ||
+                    !connection.commitText(change.replacement, 1)) return null
+            }
+            if (!connection.setSelection(edit.selectionStart, edit.selectionEnd)) return null
+            selection.resetTo(edit.selectionStart, edit.selectionEnd)
+        } finally { connection.endBatchEdit() }
+        return readRemoteState()
+    }
+
+    fun showCrossScreenInput() {
+        if (crossScreenStarting) return
+        val existing = crossScreenServer
+        if (existing != null) {
+            showCrossScreenDialog(existing)
+            return
+        }
+        crossScreenStarting = true
+        lifecycleScope.launch {
+            var created: org.fcitx.fcitx5.android.input.remote.CrossScreenServer? = null
+            try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    created = org.fcitx.fcitx5.android.input.remote.CrossScreenServer(
+                        assets.open("cross-screen.html").use { it.readBytes() },
+                        listenPort = 8765,
+                        state = { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { readRemoteState() } },
+                        sync = { edit ->
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                if (crossScreenServer !== created) null else syncRemoteEdit(edit)
+                            }
+                        }
+                    )
+                }
+                crossScreenServer = created
+                showCrossScreenDialog(requireNotNull(created))
+            } catch (e: Exception) {
+                created?.close()
+                crossScreenServer = null
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.widget.Toast.makeText(this@FcitxInputMethodService,
+                    getString(if (e is java.net.BindException) R.string.cross_screen_port_busy
+                        else R.string.cross_screen_failed), android.widget.Toast.LENGTH_LONG).show()
+            } finally { crossScreenStarting = false }
+        }
+    }
+
+    private fun showCrossScreenDialog(server: org.fcitx.fcitx5.android.input.remote.CrossScreenServer) {
+        val addresses = runCatching { server.addresses() }.getOrDefault(emptyList())
+        val message = getString(R.string.cross_screen_instructions) + "\n\n" +
+            addresses.joinToString("\n").ifEmpty { getString(R.string.cross_screen_no_network) } +
+            "\n\n" + getString(R.string.cross_screen_pairing, server.pairingCode)
+        val dialog = android.app.AlertDialog.Builder(inputView?.themedContext ?: this)
+            .setTitle(R.string.cross_screen_input)
+            .setMessage(message)
+            .setPositiveButton(R.string.cross_screen_keep_open, null)
+            .setNegativeButton(R.string.cross_screen_stop) { _, _ ->
+                crossScreenServer?.close()
+                crossScreenServer = null
+            }.create()
+        showDialog(dialog)
+        val width = minOf((420 * resources.displayMetrics.density).toInt(), (decorView.width * 0.9f).toInt())
+        dialog.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lifecycleScope.launch {
+            while (dialog.isShowing) {
+                val connected = server.lastClientActivity != 0L &&
+                    System.nanoTime() - server.lastClientActivity < 10_000_000_000L
+                val state = getString(if (connected) R.string.cross_screen_connected else R.string.cross_screen_waiting)
+                dialog.setMessage(message + "\n\n" + state)
+                kotlinx.coroutines.delay(1000)
+            }
+        }
+    }
+
+    fun recreateKeyboardView() {
+        val view = replaceInputView(ThemeManager.activeTheme)
+        currentInputEditorInfo?.let { view.startInput(it, capabilityFlags, restarting = true) }
+    }
+
+    fun toggleFloatingKeyboard() { inputView?.toggleFloating() }
+
     private var inputViewLocation = intArrayOf(0, 0)
 
     override fun onComputeInsets(outInsets: Insets) {
         if (inputDeviceMgr.isVirtualKeyboard) {
+            if (inputView?.isFloating == true) {
+                outInsets.contentTopInsets = decorView.height
+                outInsets.visibleTopInsets = decorView.height
+                outInsets.touchableInsets = Insets.TOUCHABLE_INSETS_REGION
+                inputView?.floatingTouchableRegion(outInsets.touchableRegion)
+                return
+            }
             inputView?.keyboardView?.getLocationInWindow(inputViewLocation)
             outInsets.apply {
                 contentTopInsets = inputViewLocation[1]
@@ -725,6 +874,8 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onStartInput(attribute: EditorInfo, restarting: Boolean) {
+        inputTargetGeneration++
+        remoteTargetActive = true
         // update selection as soon as possible
         // sometimes when restarting input, onUpdateSelection happens before onStartInput, and
         // initialSel{Start,End} is outdated. but it's the client app's responsibility to send
@@ -1064,6 +1215,8 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onFinishInput() {
+        inputTargetGeneration++
+        remoteTargetActive = false
         Timber.d("onFinishInput")
         postFcitxJob {
             focus(false)
@@ -1072,6 +1225,8 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onUnbindInput() {
+        inputTargetGeneration++
+        remoteTargetActive = false
         cachedKeyEvents.evictAll()
         cachedKeyEventIndex = 0
         cursorUpdateIndex = 0
@@ -1084,6 +1239,8 @@ class FcitxInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onDestroy() {
+        crossScreenServer?.close()
+        crossScreenServer = null
         recreateInputViewPrefs.forEach {
             it.unregisterOnChangeListener(recreateInputViewListener)
         }

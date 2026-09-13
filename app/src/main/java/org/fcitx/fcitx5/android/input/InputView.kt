@@ -72,7 +72,8 @@ class InputView(
     service: FcitxInputMethodService,
     fcitx: FcitxConnection,
     theme: Theme
-) : BaseInputView(service, fcitx, theme) {
+) : BaseInputView(service, fcitx, theme, service.getSharedPreferences("floating_keyboard", 0)
+    .getBoolean("enabled", false)) {
 
     private val keyBorder by ThemeManager.prefs.keyBorder
 
@@ -201,6 +202,128 @@ class InputView(
         }
     }
 
+    private val floatingPrefs = service.getSharedPreferences("floating_keyboard", 0)
+    var isFloating = floatingPrefs.getBoolean("enabled", false)
+        private set
+    private var floatingScale = floatingPrefs.getFloat("scale", 0.65f).coerceIn(0.45f, 0.9f)
+    private var floatingX = floatingPrefs.getFloat("x", 0.5f).coerceIn(0f, 1f)
+    private var floatingY = floatingPrefs.getFloat("y", 0f).coerceIn(0f, 1f)
+    private val floatingControls = android.widget.LinearLayout(themedContext).apply {
+        id = View.generateViewId()
+        setBackgroundColor(theme.barColor)
+        gravity = android.view.Gravity.CENTER_VERTICAL
+    }
+
+    fun toggleFloating() {
+        isFloating = !isFloating
+        saveFloating()
+        service.recreateKeyboardView()
+    }
+
+    val popupScale: Float get() = if (isFloating) floatingScale else 1f
+
+    private fun saveFloating() {
+        floatingPrefs.edit().putBoolean("enabled", isFloating)
+            .putFloat("scale", floatingScale).putFloat("x", floatingX)
+            .putFloat("y", floatingY).apply()
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupFloatingControls() {
+        val drag = android.widget.TextView(themedContext).apply {
+            text = context.getString(org.fcitx.fcitx5.android.R.string.floating_drag)
+            gravity = android.view.Gravity.CENTER
+            setTextColor(theme.keyTextColor)
+        }
+        floatingControls.addView(drag, android.widget.LinearLayout.LayoutParams(0, -1, 1f))
+        var startX = 0f
+        var startY = 0f
+        var initialX = 0f
+        var initialY = 0f
+        drag.setOnTouchListener { _, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    startX = e.rawX; startY = e.rawY
+                    initialX = floatingX; initialY = floatingY
+                    popup.dismissAll()
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    floatingX = (initialX + (e.rawX - startX) /
+                        (width - keyboardView.width).coerceAtLeast(1)).coerceIn(0f, 1f)
+                    floatingY = (initialY - (e.rawY - startY) / floatingTravel()).coerceIn(0f, 1f)
+                    updateFloatingLayout()
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> saveFloating()
+            }
+            true
+        }
+        fun button(label: String, description: Int, action: () -> Unit) {
+            floatingControls.addView(android.widget.Button(themedContext).apply {
+                text = label
+                contentDescription = context.getString(description)
+                setPadding(0, 0, 0, 0)
+                setOnClickListener { popup.dismissAll(); action() }
+            }, android.widget.LinearLayout.LayoutParams(dp(48), -1))
+        }
+        button("−", org.fcitx.fcitx5.android.R.string.floating_smaller) {
+            floatingScale = (floatingScale - 0.05f).coerceAtLeast(0.45f)
+            saveFloating(); updateKeyboardSize()
+        }
+        button("+", org.fcitx.fcitx5.android.R.string.floating_larger) {
+            floatingScale = (floatingScale + 0.05f).coerceAtMost(0.9f)
+            saveFloating(); updateKeyboardSize()
+        }
+        button("↔", org.fcitx.fcitx5.android.R.string.floating_restore) { toggleFloating() }
+        addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
+            if (isFloating && (r - l != or - ol || b - t != ob - ot)) updateFloatingLayout()
+        }
+    }
+
+    private fun floatingTravel() = (height - keyboardView.height - dp(40) - preedit.ui.root.height)
+        .coerceAtLeast(1).toFloat()
+
+    private fun updateFloatingLayout() {
+        if (isFloating && height > 0) {
+            val navigationInset = (bottomPaddingSpace.layoutParams as? LayoutParams)?.bottomMargin ?: 0
+            val available = (height - dp(KawaiiBarComponent.HEIGHT + 40) - keyboardBottomPaddingPx -
+                navigationInset - preedit.ui.root.height).coerceAtLeast(1)
+            val desired = (keyboardHeightPx * floatingScale).toInt().coerceAtMost(available)
+            if (windowManager.view.layoutParams.height != desired) {
+                windowManager.view.updateLayoutParams { height = desired }
+            }
+        }
+        val panelWidth = if (isFloating) (width * floatingScale).toInt()
+            .coerceAtLeast(dp(320).coerceAtMost(width)).coerceAtLeast(1) else matchParent
+        floatingControls.visibility = if (isFloating) VISIBLE else GONE
+        arrayOf(keyboardView, preedit.ui.root, floatingControls).forEach { view ->
+            view.updateLayoutParams<LayoutParams> {
+                width = panelWidth
+                horizontalBias = if (isFloating) floatingX else 0.5f
+            }
+        }
+        keyboardView.updateLayoutParams<LayoutParams> {
+            bottomMargin = if (isFloating) (floatingY * floatingTravel()).toInt() else 0
+        }
+        preedit.ui.root.updateLayoutParams<LayoutParams> {
+            bottomToTop = if (isFloating) floatingControls.id else keyboardView.id
+        }
+    }
+
+    fun floatingTouchableRegion(region: android.graphics.Region) {
+        region.setEmpty()
+        val location = IntArray(2)
+        fun include(view: View) {
+            if (view.visibility != VISIBLE || view.width == 0 || view.height == 0) return
+            view.getLocationInWindow(location)
+            region.op(android.graphics.Rect(location[0], location[1],
+                location[0] + view.width, location[1] + view.height), android.graphics.Region.Op.UNION)
+        }
+        include(keyboardView)
+        include(floatingControls)
+        include(preedit.ui.root)
+        for (i in 0 until popup.root.childCount) include(popup.root.getChildAt(i))
+    }
+
     val keyboardView: View
 
     init {
@@ -261,8 +384,6 @@ class InputView(
             })
         }
 
-        updateKeyboardSize()
-
         add(preedit.ui.root, lParams(matchParent, wrapContent) {
             above(keyboardView)
             centerHorizontally()
@@ -271,6 +392,17 @@ class InputView(
             centerHorizontally()
             bottomOfParent()
         })
+        add(floatingControls, lParams(matchParent, dp(40)) {
+            above(keyboardView)
+            centerHorizontally()
+        })
+        setupFloatingControls()
+        arrayOf(keyboardView, preedit.ui.root).forEach { child ->
+            child.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
+                if (isFloating && (r - l != or - ol || b - t != ob - ot)) updateFloatingLayout()
+            }
+        }
+        updateKeyboardSize()
         add(popup.root, lParams(matchParent, matchParent) {
             centerVertically()
             centerHorizontally()
@@ -281,8 +413,10 @@ class InputView(
     }
 
     private fun updateKeyboardSize() {
+        popup.dismissAll()
+        minimumHeight = if (isFloating) keyboardHeightPx + dp(KawaiiBarComponent.HEIGHT) + keyboardBottomPaddingPx else 0
         windowManager.view.updateLayoutParams {
-            height = keyboardHeightPx
+            height = if (isFloating) (keyboardHeightPx * floatingScale).toInt() else keyboardHeightPx
         }
         bottomPaddingSpace.updateLayoutParams {
             height = keyboardBottomPaddingPx
@@ -316,6 +450,7 @@ class InputView(
         }
         preedit.ui.root.setPadding(sidePadding, 0, sidePadding, 0)
         kawaiiBar.view.setPadding(sidePadding, 0, sidePadding, 0)
+        updateFloatingLayout()
     }
 
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {

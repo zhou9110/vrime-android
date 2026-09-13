@@ -321,4 +321,19 @@
     <string name="keyboard_height_percent_base">Keyboard height percent base</string>
     <string name="display_metrics">Display metrics (Resources.getDisplayMetrics)</string>
     <string name="real_size">Real size (Display.getRealSize)</string>
+    <string name="floating_keyboard">Floating keyboard</string>
+    <string name="floating_drag">Drag to move</string>
+    <string name="floating_smaller">Smaller keyboard</string>
+    <string name="floating_larger">Larger keyboard</string>
+    <string name="floating_restore">Restore full keyboard</string>
+    <string name="cross_screen_input">Cross-screen input</string>
+    <string name="cross_screen_failed">Could not start cross-screen input</string>
+    <string name="cross_screen_instructions">Service is running. Open the address on another device on the same trusted LAN and enter the four-digit pairing code. Text and selection follow the current Quest input field automatically. Fields that cannot provide text use one-way input automatically.</string>
+    <string name="cross_screen_no_network">No LAN IPv4 address found. Connect to Wi-Fi, then reopen this panel.</string>
+    <string name="cross_screen_pairing">Pairing code: %1$s</string>
+    <string name="cross_screen_keep_open">Keep running</string>
+    <string name="cross_screen_stop">Stop service</string>
+    <string name="cross_screen_connected">Device connected</string>
+    <string name="cross_screen_waiting">Waiting for a device</string>
+    <string name="cross_screen_port_busy">Port 8765 is in use. Close the other service and try again.</string>
 </resources>

@@ -4,6 +4,8 @@
  */
 package org.fcitx.fcitx5.android.input.popup
 
+import org.fcitx.fcitx5.android.input.dependency.inputView
+
 import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
@@ -33,6 +35,8 @@ import java.util.LinkedList
 class PopupComponent :
     UniqueComponent<PopupComponent>(), Dependent, ManagedHandler by managedHandler() {
 
+    private val inputView by manager.inputView()
+    private val scale get() = inputView.popupScale
     private val service by manager.inputMethodService()
     private val context by manager.context()
     private val theme by manager.theme()
@@ -47,15 +51,9 @@ class PopupComponent :
     private val keyBottomMargin by lazy {
         context.dp(ThemeManager.prefs.keyVerticalMargin.getValue())
     }
-    private val popupWidth by lazy {
-        context.dp(38)
-    }
-    private val popupHeight by lazy {
-        context.dp(116)
-    }
-    private val popupKeyHeight by lazy {
-        context.dp(48)
-    }
+    private val popupWidth get() = context.dp(38 * scale).toInt()
+    private val popupHeight get() = context.dp(116 * scale).toInt()
+    private val popupKeyHeight get() = context.dp(48 * scale).toInt()
     private val popupRadius by lazy {
         context.dp(ThemeManager.prefs.keyRadius.getValue()).toFloat()
     }
@@ -94,10 +92,14 @@ class PopupComponent :
             lastShowTime = System.currentTimeMillis()
             setText(content)
         }
-        popup.root.layoutParams = FrameLayout.LayoutParams(popupWidth, popupHeight).apply {
+        val availableHeight = (bounds.bottom - rootBounds.top - keyBottomMargin).coerceAtLeast(popupKeyHeight)
+        val height = popupHeight.coerceAtMost(availableHeight).coerceAtMost(root.height.coerceAtLeast(1))
+        popup.root.layoutParams = FrameLayout.LayoutParams(popupWidth, height).apply {
             // align popup bottom with key border bottom [^1]
-            topMargin = bounds.bottom - popupHeight - keyBottomMargin
-            leftMargin = (bounds.left + bounds.right - popupWidth) / 2
+            topMargin = PopupPlacement.top(bounds.bottom - height - keyBottomMargin,
+                height, rootBounds.top, rootBounds.bottom) - rootBounds.top
+            leftMargin = ((bounds.left + bounds.right - popupWidth) / 2 - rootBounds.left)
+                .coerceIn(0, (root.width - popupWidth).coerceAtLeast(0))
         }
         // make sure that popup.root does not have parent view before adding it under root container
         // it's wired that on some devices it would have a parent view despite it was newly created
@@ -229,6 +231,7 @@ class PopupComponent :
             freeEntryUi.add(entry)
         }
         showingEntryUi.clear()
+        freeEntryUi.clear()
     }
 
     val listener = PopupActionListener { action ->

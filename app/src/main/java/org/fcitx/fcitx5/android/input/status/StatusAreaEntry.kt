@@ -20,6 +20,8 @@ sealed class StatusAreaEntry(
             InputMethod,
             ReloadConfig,
             Keyboard,
+            FloatingKeyboard,
+            CrossScreenInput,
             ThemeList
         }
     }

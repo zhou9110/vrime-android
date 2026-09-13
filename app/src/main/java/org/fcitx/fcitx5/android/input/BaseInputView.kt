@@ -33,7 +33,8 @@ import kotlin.math.max
 abstract class BaseInputView(
     val service: FcitxInputMethodService,
     val fcitx: FcitxConnection,
-    val theme: Theme
+    val theme: Theme,
+    portraitStyle: Boolean = false
 ) : ConstraintLayout(service) {
 
     /**
@@ -73,7 +74,11 @@ abstract class BaseInputView(
 
     private var candidateActionMenu: PopupMenu? = null
 
-    val themedContext = context.withTheme(R.style.Theme_InputViewTheme)
+    val themedContext = context.withTheme(R.style.Theme_InputViewTheme).apply {
+        if (portraitStyle) applyOverrideConfiguration(android.content.res.Configuration().apply {
+            orientation = android.content.res.Configuration.ORIENTATION_PORTRAIT
+        })
+    }
 
     fun showCandidateActionMenu(idx: Int, text: String, view: View) {
         candidateActionMenu?.dismiss()

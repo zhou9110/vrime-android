@@ -321,4 +321,19 @@
     <string name="keyboard_height_percent_base">键盘高度百分比</string>
     <string name="display_metrics">显示指标 (Resources.getDisplayMetrics)</string>
     <string name="real_size">真实尺寸 (Display.getRealSize)</string>
+    <string name="floating_keyboard">悬浮键盘</string>
+    <string name="floating_drag">拖动移动</string>
+    <string name="floating_smaller">缩小键盘</string>
+    <string name="floating_larger">放大键盘</string>
+    <string name="floating_restore">恢复完整键盘</string>
+    <string name="cross_screen_input">跨屏输入</string>
+    <string name="cross_screen_failed">无法开启跨屏输入</string>
+    <string name="cross_screen_instructions">服务已开启。在同一可信局域网的其他设备打开以下地址，填写四位配对码。连接后文字和选区自动跟随 Quest 当前输入框，清空或切换输入框无需重新连接。不支持回读的输入框会自动使用单向输入。</string>
+    <string name="cross_screen_no_network">未找到局域网 IPv4 地址，请连接 Wi-Fi 后重新打开此面板。</string>
+    <string name="cross_screen_pairing">配对码：%1$s</string>
+    <string name="cross_screen_keep_open">收起并保持服务</string>
+    <string name="cross_screen_stop">关闭服务</string>
+    <string name="cross_screen_connected">设备已连接</string>
+    <string name="cross_screen_waiting">等待其他设备连接</string>
+    <string name="cross_screen_port_busy">端口 8765 已被占用，请关闭占用该端口的服务后重试。</string>
 </resources>
