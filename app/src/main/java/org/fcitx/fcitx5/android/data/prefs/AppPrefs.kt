@@ -59,6 +59,8 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
     }
 
     inner class Keyboard : ManagedPreferenceCategory(R.string.virtual_keyboard, sharedPreferences) {
+        val useT9Layout = switch(R.string.use_t9_layout, "use_t9_layout", false)
+
         val hapticOnKeyPress =
             enumList(
                 R.string.button_haptic_feedback,

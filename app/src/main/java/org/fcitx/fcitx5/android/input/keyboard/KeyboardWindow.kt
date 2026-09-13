@@ -68,11 +68,17 @@ class KeyboardWindow : InputWindow.SimpleInputWindow<KeyboardWindow>(), Essentia
     private val keyboards: HashMap<String, BaseKeyboard> by lazy {
         hashMapOf(
             TextKeyboard.Name to TextKeyboard(context, theme),
-            NumberKeyboard.Name to NumberKeyboard(context, theme)
+            NumberKeyboard.Name to NumberKeyboard(context, theme),
+            T9Keyboard.Name to T9Keyboard(context, theme)
         )
     }
     private var currentKeyboardName = ""
     private var lastSymbolType: String by AppPrefs.getInstance().internal.lastSymbolLayout
+    private val useT9Layout by AppPrefs.getInstance().keyboard.useT9Layout
+
+    /** The layout to use for ordinary text input, honoring the nine-key preference. */
+    private val textLayoutName: String
+        get() = if (useT9Layout) T9Keyboard.Name else TextKeyboard.Name
 
     private val currentKeyboard: BaseKeyboard? get() = keyboards[currentKeyboardName]
 
@@ -91,7 +97,7 @@ class KeyboardWindow : InputWindow.SimpleInputWindow<KeyboardWindow>(), Essentia
     // This will be called EXACTLY ONCE
     override fun onCreateView(): View {
         keyboardView = context.frameLayout(R.id.keyboard_view)
-        attachLayout(TextKeyboard.Name)
+        attachLayout(textLayoutName)
         return keyboardView
     }
 
@@ -120,7 +126,9 @@ class KeyboardWindow : InputWindow.SimpleInputWindow<KeyboardWindow>(), Essentia
         val target = to.ifEmpty { lastSymbolType }
         ContextCompat.getMainExecutor(service).execute {
             if (keyboards.containsKey(target)) {
-                if (remember && target != TextKeyboard.Name) {
+                // T9, like TextKeyboard, is a text layout rather than a symbol one,
+                // so it must not become the target the symbol key returns to.
+                if (remember && target != TextKeyboard.Name && target != T9Keyboard.Name) {
                     lastSymbolType = target
                 }
                 if (target == currentKeyboardName) return@execute
@@ -142,7 +150,7 @@ class KeyboardWindow : InputWindow.SimpleInputWindow<KeyboardWindow>(), Essentia
         val targetLayout = when (info.inputType and InputType.TYPE_MASK_CLASS) {
             InputType.TYPE_CLASS_NUMBER -> NumberKeyboard.Name
             InputType.TYPE_CLASS_PHONE -> NumberKeyboard.Name
-            else -> TextKeyboard.Name
+            else -> textLayoutName
         }
         switchLayout(targetLayout, remember = false)
     }
