@@ -3,6 +3,8 @@
 > 面向 Meta Quest 3 的原生中文输入法，基于 fcitx5-android 的上游优先薄 fork。
 >
 > 本文档中标注 ✅ 的事实均已在本仓库源码中核实（附文件路径）；标注 ⚠️ 的为待核实项。
+>
+> **当前进展、分支清单与本地 patch 台账见 [STATUS.md](STATUS.md)。** 本文件是计划，STATUS 是状态：计划相对稳定，状态随时更新。
 
 ---
 
@@ -266,32 +268,70 @@ IDBFS / `syncfs` 持久化层、`EM_ASM(_deployStatus…)` upcall、`leveldb_pat
 
 ### Phase 1 — 构建打通
 
-- [ ] 加 upstream remote：`git remote add upstream https://github.com/fcitx5-android/fcitx5-android.git`
-- [ ] `git submodule update --init --recursive`
-- [ ] 装齐宿主依赖（`extra-cmake-modules` + gettext，或直接用仓库的 `nix develop` / `nix-shell`）
-- [ ] 单 ABI 构建：`./gradlew assembleDebug -PbuildABI=arm64-v8a`
-- [ ] 基座 APK 装到 Quest 并起得来
+- [x] 加 upstream remote：`git remote add upstream https://github.com/fcitx5-android/fcitx5-android.git`
+- [x] `git submodule update --init --recursive`
+- [x] 装齐宿主依赖（`extra-cmake-modules` + gettext，或直接用仓库的 `nix develop` / `nix-shell`）
+- [x] 单 ABI 构建，基座 APK 装到 Quest 并起得来
 - [ ] 装 `plugin/rime`，确认 RIME 引擎可用（列出 schema、能输入）
 - [ ] 装 `plugin/unikey`，确认越南语可用 —— **这一步就验证了多语种路线，零代码**
+
+**构建实况（已踩过的坑）**
+
+`Versions.kt` 要求 **CMake 3.31.6**，而 Android SDK 常见只带 3.18.1 / 3.22.1，配置阶段直接失败（`[CXX1300]`）。两条路：
+
+1. **正解**：`sdkmanager "cmake;3.31.6"`
+2. **临时可用**：全部 CMakeLists 都只声明 `cmake_minimum_required(VERSION 3.18)`，**唯一**需要更高版本的是 `plugin/rime/src/main/cpp/CMakeLists.txt:38` 的 `$<LINK_LIBRARY:WHOLE_ARCHIVE,Rime_static>`（要 CMake **3.24+**）。而 `:app` 只依赖 `:lib:*` 与 `:codegen`、**不依赖任何 plugin 模块**，所以只构建基座时可以降级：
+   ```sh
+   ./gradlew :app:assembleDebug -PbuildABI=arm64-v8a -PcmakeVersion=3.22.1
+   ```
+   **这条路到装 rime 插件时失效**，届时 3.24+ 绕不过去。
+
+**覆盖值放机器级配置，不要改 `Versions.kt`** —— 后者会变成每次 rebase 都冲突的本地 patch。这些值本就支持外部覆盖（`ProjectExtensions.kt` 读 Gradle 属性或环境变量），写进 `~/.gradle/gradle.properties`：
+
+```properties
+cmakeVersion=3.22.1
+buildABI=arm64-v8a
+```
+
+**安装与启用**
+
+产物在 `app/build/outputs/apk/debug/`，ABI split 开启且无 universal 包。debug 构建带 `applicationIdSuffix = ".debug"`，可与官方 fcitx5-android 共存安装。
+
+**不要手拼 IME ID**（debug 后缀只加在 applicationId 上，服务类名不变），从设备读：
+
+```sh
+adb shell ime list -a -s
+adb shell ime disable com.oculus.vrshell/com.oculus.panelapp.keyboardv2.KeyboardInputMethodService
+adb shell ime enable  <读到的完整 ID>
+adb shell ime set     <读到的完整 ID>
+```
+
+**验证默认值必须先清数据**：`ManagedPreference.getValue()` 是 `sharedPreferences.getInt(key, defaultValue)`，默认值只是回退、不写入存储。手动调过的设置会永久盖过新默认值，所以验证全新安装体验要 `adb shell pm clear <applicationId>`。
 
 ### Phase 2 — 九键布局（推荐的起点）
 
 纯新增，不依赖真机结论，写完即可编译验证。
 
-- [ ] 新建 `input/keyboard/T9Keyboard.kt`，以 `NumberKeyboard.kt`（70 行）为模板
-  - 3×4 数字网格，用 `NumPadKey` 发 `0xffb0`–`0xffb9`
-  - 侧栏：拼音消歧候选 / 标点
-  - 功能键：退格、重输、回车、空格、`123` / `ABC` 切换
-- [ ] `KeyboardWindow.kt` 的 `keyboards` map 加一行（单独 commit）
+- [x] 新建 `input/keyboard/T9Keyboard.kt`，以 `NumberKeyboard.kt`（70 行）为模板
+  - 实际做成 **4×4** 网格（第四列是退格 / 重输 / `ABC` / 回车），底排为 `!?#` / 空格 / `123` / 回车
+  - 三个 T9 专属按键定义 **file-private**，`KeyDefPreset.kt` 一行未动
+  - 空格复用上游 `SpaceKey` 类型（`BaseKeyboard` 按 `is SpaceKey` 挂滑动移光标与音效），其 `percentWidth = 0f` 恰好填满第四列
+- [x] `KeyboardWindow.kt` 的 `keyboards` map 加一行（单独 commit）
+- [x] 顺手修掉 `switchLayout` 把 T9 记入 `lastSymbolType` 的潜在 bug（T9 是文本布局，不是符号布局）
 - [ ] 移植 `t9Pinyin.ts` → `T9PinyinUtils.kt`（用于拼音消歧候选）
 - [ ] 补齐 VRIME 侧缺失的：符号面板（Web 版是 `disabled` 状态）、长按 / 多次点击
 - [ ] 修掉 `onPinyinClick` 的 `setTimeout` 竞态，改为顺序等待引擎响应
 - [ ] 编译验证 + 装到 Quest 手动验证
 
+**按键映射的分歧**：标准九键（`yuyan_t9_pinyin`）发**普通数字** `FcitxKey_1`–`9`，`1` 位无字母故复用为音节分隔符 `'`；而 `xiaobai_simp` 数字重排（7/8/9 在上排）且发 **Numpad** keysym `FcitxKey_KP_0 + n`。当前实现只做了标准映射，xiaobai 变体待加。
+
+**入口暂用偏好开关**：理想行为是「选中九键方案自动切九键」，钩子是 `KeyboardWindow.onImeUpdate(ime: InputMethodEntry)`。但这取决于 **RIME 方案如何暴露成 fcitx 输入法条目** —— fcitx5-rime 可能只暴露单个 `rime` 条目而把方案切换留在 rime 内部。未验证，不应靠猜实现，故先用 `use_t9_layout` 开关，待 rime 插件上真机后再补。
+
 ### Phase 3 — VR 适配
 
-- [ ] **先只调偏好项**，验证 §3.5 的现成旋钮是否足够：字号 → 40–56sp 量级试起，候选项内边距 → 16–32dp，键盘高度百分比上调
-- [ ] 沉淀为 VR 默认配置 profile（新增文件）
+- [x] **先只调偏好项** —— 结论：现成旋钮足够，**尺寸适配零代码**，只是改默认值
+- [x] 真机实测并沉淀为默认值（横屏，见 `feat/vr-defaults`）：键盘高度 49% → **85%**、两侧边距 0 → **6dp**、底部边距 0 → **5dp**、工具栏默认展开 false → **true**
+- [ ] 继续实测其余默认值：候选栏字号（20sp，可开到 64）、候选项内边距（2/4dp，可开到 64）、长按延迟（300ms，范围 100–700）、按键弹出预览（VR 无触觉反馈，价值高于手机）
 - [ ] VR 主题预设（新增数据）
 - [ ] 候选栏位置：**固定角落，不要用跟随光标** —— 依赖目标应用实现 `CursorAnchorInfo`，Quest 上「应用」可能是合成器里的 2D panel，上报完全未经测试
 - [ ] 射线点击适配：Quest 的「触摸」是控制器射线或手部捏合投递的 touch 事件。验证命中率，必要时加大热区（此改动上游化）
