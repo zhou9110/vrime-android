@@ -196,7 +196,7 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
                 30,
                 R.string.landscape,
                 "keyboard_height_percent_landscape",
-                49,
+                85,
                 10,
                 90,
                 "%"
@@ -216,7 +216,7 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
                 0,
                 R.string.landscape,
                 "keyboard_side_padding_landscape",
-                0,
+                6,
                 0,
                 300,
                 "dp"
@@ -236,7 +236,7 @@ class AppPrefs(private val sharedPreferences: SharedPreferences) {
                 0,
                 R.string.landscape,
                 "keyboard_bottom_padding_landscape",
-                0,
+                5,
                 0,
                 100,
                 "dp"
